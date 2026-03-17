@@ -43,23 +43,23 @@ class ElevenLabsClonePipeline:
                 self.client = _get_elevenlabs_client(self.api_key)
                 logger.info("ElevenLabs client initialized successfully.")
             except Exception as e:
-                logger.warning(f"ElevenLabs client init failed: {e}. Using dummy fallback.")
+                logger.error(f"ElevenLabs client init failed: {e}")
+                raise RuntimeError(f"ElevenLabs client init failed: {e}")
 
     def apply_tone_color(self, elder_id: str, text: str, profile_audio_path: str) -> str:
         """
         Synthesize speech using a cloned voice of the elder.
         If a voice_id is already cached for the elder, reuses it.
         Otherwise creates a new cloned voice and caches the voice_id.
-        Falls back to dummy WAV if anything fails.
+        Raises an error on failure.
         """
         out_filename = f"final_{elder_id}_{uuid.uuid4().hex[:8]}.wav"
         final_out_path = str(TEMP_OUT_DIR / out_filename)
 
         client = self.client
         if not client:
-            logger.warning("ElevenLabs client unavailable. Writing dummy audio.")
-            self._write_dummy(final_out_path)
-            return final_out_path
+            logger.error("ElevenLabs client unavailable.")
+            raise RuntimeError("ElevenLabs client unavailable")
 
         elder_voice_dir = VOICE_DIR / elder_id
         elder_voice_dir.mkdir(parents=True, exist_ok=True)
@@ -88,8 +88,7 @@ class ElevenLabsClonePipeline:
                 logger.info(f"Voice cloned successfully. voice_id={voice_id}")
             except Exception as e:
                 logger.error(f"ElevenLabs voice cloning failed: {e}")
-                self._write_dummy(final_out_path)
-                return final_out_path
+                raise RuntimeError(f"ElevenLabs voice cloning failed: {e}")
 
         # Generate speech with cloned voice
         logger.info(f"Generating speech with voice_id={voice_id} for elder {elder_id}")
@@ -103,24 +102,11 @@ class ElevenLabsClonePipeline:
             logger.info(f"Audio saved to {final_out_path}")
         except Exception as e:
             logger.error(f"ElevenLabs speech generation failed: {e}")
-            self._write_dummy(final_out_path)
+            raise RuntimeError(f"ElevenLabs speech generation failed: {e}")
 
         return final_out_path
 
-    def _write_dummy(self, path: str):
-        """Write a minimal silent WAV file as fallback."""
-        import wave
-        import struct
-        try:
-            with wave.open(path, "w") as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(44100)
-                for _ in range(44100):
-                    wav_file.writeframesraw(struct.pack('<h', 0))
-            logger.info(f"Dummy silent WAV written to {path}")
-        except Exception as e:
-            logger.error(f"Failed to write dummy WAV: {e}")
+
 
 
 openvoice_pipeline = ElevenLabsClonePipeline()

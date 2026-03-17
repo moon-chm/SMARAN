@@ -121,3 +121,34 @@ SET n.confidence_score = CASE WHEN coalesce(n.confidence_score, 0.0) + 0.15 >= 1
     n.last_reinforced_at = $now
 RETURN n.id as node_id, n.confidence_score as confidence
 """
+
+GET_USER_BY_USERNAME = """MATCH (u:User {username: $username}) RETURN u"""
+
+GET_USER_BY_EMAIL = """MATCH (u:User {email: $email}) RETURN u"""
+
+CREATE_USER = """
+CREATE (u:User {
+    id: randomUUID(),
+    username: $username,
+    email: $email,
+    password_hash: $password_hash,
+    role: $role,
+    elder_id: $elder_id,
+    full_name: $full_name,
+    created_at: $created_at,
+    is_active: $is_active
+}) RETURN u.id as user_id, u.username as username, u.role as role
+"""
+
+ENSURE_ELDER_NODE = """
+MERGE (e:Elder {id: $elder_id})
+ON CREATE SET e.full_name = $full_name, e.created_at = $created_at
+"""
+
+CREATE_USER_USERNAME_CONSTRAINT = """
+CREATE CONSTRAINT user_username_unique IF NOT EXISTS FOR (u:User) REQUIRE u.username IS UNIQUE
+"""
+
+CREATE_USER_EMAIL_CONSTRAINT = """
+CREATE CONSTRAINT user_email_unique IF NOT EXISTS FOR (u:User) REQUIRE u.email IS UNIQUE
+"""

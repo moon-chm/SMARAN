@@ -52,8 +52,8 @@ Write-Host "Step 1: Initializing Neo4j Schema (Constraints & Indices)..."
 python app\graph\init_graph.py
 Write-Host "✅ Graph Initialized`n" -ForegroundColor $Green
 
-# Step 2: Boot FastAPI layer for Seeding
-Write-Host "Step 2: Booting FastAPI layer for Seeding..."
+# Step 2: Boot FastAPI layer
+Write-Host "Step 2: Booting FastAPI layer..."
 $apiProcess = Start-Process -FilePath "uvicorn" -ArgumentList "app.main:app","--host","0.0.0.0","--port","8000" -PassThru -NoNewWindow
 
 # Wait for API to come online
@@ -78,13 +78,8 @@ if (-not $apiReady) {
 }
 Write-Host "`n✅ FastAPI Online`n" -ForegroundColor $Green
 
-# Step 3: Run Seed
-Write-Host "Step 3: Seeding Graph Demo Data..."
-python scripts\seed_demo.py
-Write-Host "✅ Seed Completed`n" -ForegroundColor $Green
-
-# Step 4 & 5: Start Streamlit Dashboards
-Write-Host "Step 4 & 5: Starting Streamlit Panels..."
+# Step 3: Start Streamlit Dashboards
+Write-Host "Step 3: Starting Streamlit Panels..."
 $cgProcess = Start-Process -FilePath "streamlit" -ArgumentList "run","frontend\caregiver_panel.py","--server.port","8501","--server.headless","true" -PassThru -NoNewWindow
 $elderProcess = Start-Process -FilePath "streamlit" -ArgumentList "run","frontend\elder_panel.py","--server.port","8502","--server.headless","true" -PassThru -NoNewWindow
 

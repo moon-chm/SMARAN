@@ -42,22 +42,13 @@ class ElevenLabsDefaultPipeline:
                 save(audio, out_path)
             except Exception as e:
                 logger.error(f"ElevenLabs API error: {e}")
-                self._write_dummy(out_path)
+                raise RuntimeError(f"TTS generation failed: {e}")
         else:
-            logger.warning("Mocking TTS generation - ElevenLabs client missing or no API key")
-            self._write_dummy(out_path)
+            logger.error("ElevenLabs client missing or no API key")
+            raise RuntimeError("ElevenLabs client missing or no API key")
             
         return out_path
         
-    def _write_dummy(self, path: str):
-        with open(path, "wb") as f:
-            # minimal valid wav header so frontend doesn't crash
-            import wave
-            import struct
-            with wave.open(path, "w") as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(44100)
-                wav_file.writeframesraw(struct.pack('<h', 0))
+
 
 tts_pipeline = ElevenLabsDefaultPipeline()

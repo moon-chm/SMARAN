@@ -48,8 +48,8 @@ echo "Step 1: Initializing Neo4j Schema (Constraints & Indices)..."
 python app/graph/init_graph.py
 echo -e "${GREEN}✅ Graph Initialized${NC}\n"
 
-# Start the API in the background so Step 2 can run against it
-echo "Step 2: Booting FastAPI layer for Seeding..."
+# Start the API in the background
+echo "Step 2: Booting FastAPI layer..."
 uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 API_PID=$!
 
@@ -61,13 +61,8 @@ until $(curl --output /dev/null --silent --head --fail http://localhost:8000/hea
 done
 echo -e "\n${GREEN}✅ FastAPI Online${NC}\n"
 
-# Step 3: Run Seed
-echo "Step 3: Seeding Graph Demo Data..."
-python scripts/seed_demo.py
-echo -e "${GREEN}✅ Seed Completed${NC}\n"
-
-# Step 4 & 5: Start Streamlit Dashboards
-echo "Step 4 & 5: Starting Streamlit Panels..."
+# Step 3: Start Streamlit Dashboards
+echo "Step 3: Starting Streamlit Panels..."
 streamlit run frontend/caregiver_panel.py --server.port 8501 --server.headless true > /dev/null 2>&1 &
 CG_PID=$!
 

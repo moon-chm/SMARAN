@@ -7,7 +7,7 @@ PIP = pip
 UVICORN = uvicorn
 STREAMLIT = streamlit
 
-all: install check-env seed test run
+all: install check-env test run
 
 install:
 	@echo "📦 Installing Dependencies..."
@@ -21,12 +21,6 @@ check-env:
 		echo "⚠️ PLEASE FILL OUT .env BEFORE CONTINUING."; \
 		exit 1; \
 	fi
-
-seed:
-	@echo "🌱 Initializing Graph and Seeding Data..."
-	export PYTHONPATH=$$(pwd) && $(PYTHON) app/graph/init_graph.py
-	@# Requires API to be running for proper seed ingestion structure
-	@echo "⚠️ Seed requires API to be running on port 8000. Use 'sh start.sh' for sequence execution."
 
 run:
 	@echo "🚀 Launching Full System locally using Bash sequence..."

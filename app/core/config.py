@@ -8,8 +8,8 @@ class Settings(BaseSettings):
     NEO4J_USER: str = "neo4j"
     NEO4J_PASSWORD: str = "demo"
     
-    GROQ_API_KEY: str = "dummy_groq_key"
-    ELEVENLABS_API_KEY: str = "dummy_elevenlabs_key"
+    GROQ_API_KEY: str
+    ELEVENLABS_API_KEY: str
     
     JWT_SECRET: str = "fallback_secret_for_demo_purposes_only"
     JWT_ALGORITHM: str = "HS256"

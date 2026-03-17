@@ -1,0 +1,8 @@
+__pycache__
+*.pyc
+.env
+data/
+*.wav
+*.mp3
+node_modules
+.git

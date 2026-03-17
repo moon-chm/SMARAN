@@ -37,6 +37,10 @@ async def lifespan(app: FastAPI):
     os.makedirs("data/faiss_indexes", exist_ok=True)
     os.makedirs("data/voice_profiles", exist_ok=True)
     
+    # Log all registered routes
+    for route in app.routes:
+        logger.info(f"Route registered: {getattr(route, 'methods', 'GET')} {route.path}")
+    
     try:
         await initialize_graph()
     except Exception as e:
@@ -66,17 +70,25 @@ app = FastAPI(
     description="Graph-Based Emotionally Intelligent Memory System for Elder Care"
 )
 
+# Prevent 307 redirects by disabling implicit slashes at router level
+app.router.redirect_slashes = False
+
 # Add rate limiter state and exception handler
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Register routers
+auth.router.redirect_slashes = False
+memory.router.redirect_slashes = False
+chat.router.redirect_slashes = False
+voice_upload.router.redirect_slashes = False
+
 app.include_router(auth.router)
 app.include_router(memory.router)
 app.include_router(chat.router)
 app.include_router(voice_upload.router)
 
-# CORS middleware
+# CORS middleware allowing all origins for hackathon
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -98,14 +110,14 @@ async def log_requests(request: Request, call_next):
     return response
 
 @app.get("/health", response_model=Dict[str, Any])
-@limiter.limit("5/minute")
-async def health_check(request: Request):
+async def health_check():
     """
     Health check endpoint returning app status.
     """
     logger.info("Health check endpoint called")
     return {
-        "status": "online",
-        "version": settings.VERSION,
-        "timestamp": datetime.utcnow().isoformat()
+        "status": "ok",
+        "version": "1.0.0",
+        "service": "SMARAN API"
     }
+

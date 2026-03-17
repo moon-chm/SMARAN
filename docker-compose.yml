@@ -10,7 +10,16 @@ services:
     volumes:
       - ./app:/app/app
       - ./data:/app/data
-    restart: always
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1g
 
   caregiver_panel:
     build: .
@@ -24,6 +33,11 @@ services:
       - ./frontend:/app/frontend
     depends_on:
       - api
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
 
   elder_panel:
     build: .
@@ -37,15 +51,8 @@ services:
       - ./frontend:/app/frontend
     depends_on:
       - api
-
-  seeder:
-    build: .
-    container_name: smaran_seeder
-    command: python scripts/seed_demo.py
-    env_file:
-      - .env
-    environment:
-      - API_URL=http://api:8000/api
-    depends_on:
-      - api
-    restart: "no"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m

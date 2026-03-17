@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import logging
+import time
 from datetime import datetime
 
 from app.graph.schema import MemoryIngestRequest, MindmapResponse, EmotionalMemoryNode, MedicineNode, AppointmentNode, SymptomNode
@@ -30,6 +31,24 @@ RETURN n, labels(n) as labels
 ORDER BY n.confidence_score DESC
 LIMIT $limit
 """
+
+# Simple in-memory cache for fast, static-ish reads
+MEMORY_CACHE = {}
+
+def get_cache(key: str) -> Optional[Any]:
+    if key in MEMORY_CACHE and time.time() - MEMORY_CACHE[key]["timestamp"] < 60:
+        logger.info(f"Cache hit for {key}")
+        return MEMORY_CACHE[key]["data"]
+    return None
+
+def set_cache(key: str, data: Any):
+    MEMORY_CACHE[key] = {"data": data, "timestamp": time.time()}
+
+def clear_cache(elder_id: str):
+    keys_to_delete = [k for k in MEMORY_CACHE.keys() if k.startswith(f"{elder_id}_")]
+    for k in keys_to_delete:
+        del MEMORY_CACHE[k]
+
 
 @router.post("/ingest", response_model=Dict[str, Any])
 async def ingest_memory(
@@ -95,6 +114,9 @@ async def ingest_memory(
                     r = await res.single()
                     if r: created_nodes.append({"type": "EmotionalMemory", "id": r["node_id"]})
 
+        # Clear cache when graph changes
+        clear_cache(request.elder_id)
+
         return {
             "status": "success",
             "elder_id": request.elder_id,
@@ -105,7 +127,7 @@ async def ingest_memory(
 
     except Exception as e:
         logger.error(f"Error ingesting memory: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Database temporarily unavailable. Try again in a moment.")
 
 
 @router.get("/search/{elder_id}", response_model=Dict[str, Any])
@@ -119,8 +141,13 @@ async def search_memories(
     logger.info(f"Hybrid search requested by elder {elder_id}: '{query}'")
     
     try:
-        results = await hybrid_retriever.retrieve(elder_id, query, top_k)
-
+        try:
+            results = await hybrid_retriever.retrieve(elder_id, query, top_k)
+        except Exception as fe:
+            logger.error(f"FAISS retrieval error: {fe}. Attempting rescue.")
+            # If FAISS index missing/crashed, just fallback gracefully to Neo4j.
+            results = []
+            
         # FIX: If FAISS returns nothing (e.g. after index clear), fallback to full graph fetch
         if not results:
             logger.warning(f"FAISS returned 0 results for {elder_id}, falling back to graph scan.")
@@ -155,7 +182,7 @@ async def search_memories(
         }
     except Exception as e:
         logger.error(f"Search retrieval failed: {e}")
-        raise HTTPException(status_code=500, detail="Search failed")
+        raise HTTPException(status_code=500, detail="Database temporarily unavailable. Try again in a moment.")
 
 
 @router.get("/mindmap/{elder_id}")
@@ -203,46 +230,64 @@ async def get_mindmap(
 
     except Exception as e:
         logger.error(f"Error fetching mindmap: {e}")
-        raise HTTPException(status_code=500, detail="Error retrieving graph data")
+        raise HTTPException(status_code=500, detail="Database temporarily unavailable. Try again in a moment.")
 
 
 @router.get("/appointments/{elder_id}")
 async def get_appointments(elder_id: str, current_user: TokenData = Depends(get_current_user)):
     verify_elder_self_access(elder_id, current_user)
+    cache_key = f"{elder_id}_appointments"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return {"status": "success", "data": cached}
+        
     try:
         async with await neo4j_manager.get_session(elder_id) as session:
             result = await session.run(GET_APPOINTMENTS_QUERY, elder_id=elder_id)
             records = await result.data()
+            set_cache(cache_key, records)
             return {"status": "success", "data": records}
     except Exception as e:
         logger.error(f"Error fetching appointments: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Database temporarily unavailable. Try again in a moment.")
 
 
 @router.get("/symptoms/{elder_id}")
 async def get_symptoms(elder_id: str, current_user: TokenData = Depends(get_current_user)):
     verify_elder_self_access(elder_id, current_user)
+    cache_key = f"{elder_id}_symptoms"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return {"status": "success", "data": cached}
+        
     try:
         async with await neo4j_manager.get_session(elder_id) as session:
             result = await session.run(GET_SYMPTOMS_QUERY, elder_id=elder_id)
             records = await result.data()
+            set_cache(cache_key, records)
             return {"status": "success", "data": records}
     except Exception as e:
         logger.error(f"Error fetching symptoms: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Database temporarily unavailable. Try again in a moment.")
 
 
 @router.get("/medicines/{elder_id}")
 async def get_medicines(elder_id: str, current_user: TokenData = Depends(get_current_user)):
     verify_elder_self_access(elder_id, current_user)
+    cache_key = f"{elder_id}_medicines"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return {"status": "success", "data": cached}
+        
     try:
         async with await neo4j_manager.get_session(elder_id) as session:
             result = await session.run(GET_MEDICINES_QUERY, elder_id=elder_id)
             records = await result.data()
+            set_cache(cache_key, records)
             return {"status": "success", "data": records}
     except Exception as e:
         logger.error(f"Error fetching medicines: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Database temporarily unavailable. Try again in a moment.")
 
 
 @router.post("/reinforce/{node_id}")
@@ -250,17 +295,12 @@ async def reinforce_node(
     node_id: str,
     current_user: TokenData = Depends(require_role(Role.CAREGIVER))
 ):
-    """
-    FIX: was calling get_session() with no elder_id argument.
-    Reinforce doesn't filter by elder so we use a global session approach —
-    fetch the node first to get its elder_id, then reinforce.
-    """
     # Step 1: find which elder owns this node
     FIND_ELDER_QUERY = "MATCH (n {id: $node_id}) RETURN n.elder_id AS elder_id LIMIT 1"
     
     try:
         # Use any valid elder session to find the node (node id is globally unique)
-        async with await neo4j_manager.get_session("elder_123") as session:
+        async with await neo4j_manager.get_session("system") as session:
             lookup = await session.run(FIND_ELDER_QUERY, node_id=node_id)
             record = await lookup.single()
             if not record:
@@ -276,6 +316,8 @@ async def reinforce_node(
             )
             record = await result.single()
             if record:
+                # Invalidate cache for this elder to reflect reinforced node
+                clear_cache(elder_id)
                 return {
                     "status": "success",
                     "node_id": record["node_id"],
@@ -288,4 +330,4 @@ async def reinforce_node(
         raise he
     except Exception as e:
         logger.error(f"Error reinforcing node {node_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Database temporarily unavailable. Try again in a moment.")

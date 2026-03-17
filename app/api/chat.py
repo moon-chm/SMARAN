@@ -91,33 +91,39 @@ async def process_chat(
     logger.info(f"Processing chat for elder {request.elder_id}")
 
     # 1. Detect Mood
-    hour = request.hour_of_day if request.hour_of_day is not None else datetime.utcnow().hour
-    mood_label, confidence = mood_classifier.detect_mood(request.message, hour)
+    try:
+        hour = request.hour_of_day if request.hour_of_day is not None else datetime.utcnow().hour
+        mood_label, confidence = mood_classifier.detect_mood(request.message, hour)
 
-    # 2. Track Mood
-    await behavioral_tracker.track_mood(request.elder_id, mood_label, confidence, source_type="chat")
+        # 2. Track Mood
+        await behavioral_tracker.track_mood(request.elder_id, mood_label, confidence, source_type="chat")
 
-    # 3. MoodMitra Check
-    recommendation = await mood_mitra.evaluate_trigger(request.elder_id, mood_label)
+        # 3. MoodMitra Check
+        recommendation = await mood_mitra.evaluate_trigger(request.elder_id, mood_label)
 
-    # Ingest alert node if 3 consecutive negative moods
-    if recommendation and recommendation.get("alert_triggered"):
-        try:
-            async with await neo4j_manager.get_session(request.elder_id) as session:
-                mem_id = str(uuid.uuid4())
-                await session.run(
-                    MERGE_MEMORY_NODE,
-                    elder_id=request.elder_id,
-                    memory_id=mem_id,
-                    description=f"Automated Alert: Elder has expressed {mood_label} mood for 3 consecutive interactions.",
-                    emotion_tag=mood_label,
-                    created_at=datetime.utcnow().isoformat(),
-                    confidence_score=1.0,
-                    source_type="mood_alert",
-                    last_reinforced_at=datetime.utcnow().isoformat()
-                )
-        except Exception as e:
-            logger.error(f"Failed to ingest mood alert: {e}")
+        # Ingest alert node if 3 consecutive negative moods
+        if recommendation and recommendation.get("alert_triggered"):
+            try:
+                async with await neo4j_manager.get_session(request.elder_id) as session:
+                    mem_id = str(uuid.uuid4())
+                    await session.run(
+                        MERGE_MEMORY_NODE,
+                        elder_id=request.elder_id,
+                        memory_id=mem_id,
+                        description=f"Automated Alert: Elder has expressed {mood_label} mood for 3 consecutive interactions.",
+                        emotion_tag=mood_label,
+                        created_at=datetime.utcnow().isoformat(),
+                        confidence_score=1.0,
+                        source_type="mood_alert",
+                        last_reinforced_at=datetime.utcnow().isoformat()
+                    )
+            except Exception as e:
+                logger.error(f"Failed to ingest mood alert: {e}")
+
+    except Exception as e:
+        logger.error(f"Error in mood pipeline: {e}")
+        mood_label, confidence = "neutral", 0.5
+        recommendation = None
 
     # Emergency flag
     if request.message.startswith("EMERGENCY:"):
@@ -125,7 +131,11 @@ async def process_chat(
 
     # 4. Hybrid RAG retrieval
     start_time = time.time()
-    retrieved_memories = await hybrid_retriever.retrieve(request.elder_id, request.message, top_k=3)
+    try:
+        retrieved_memories = await hybrid_retriever.retrieve(request.elder_id, request.message, top_k=3)
+    except Exception as e:
+        logger.error(f"Error retrieving FAISS memories: {e}")
+        retrieved_memories = []
 
     # FIX: If FAISS returns nothing, fall back to direct Neo4j graph fetch
     if not retrieved_memories:
@@ -138,12 +148,17 @@ async def process_chat(
     retrieval_time_ms = round((time.time() - start_time) * 1000, 2)
 
     # 5. Generate LLM response
-    sys_reply = await groq_client.generate_response(
-        message=request.message,
-        retrieved_context=retrieved_context,
-        detected_mood=mood_label,
-        elder_name=request.elder_id
-    )
+    elder_name = current_user.full_name or current_user.username
+    try:
+        sys_reply = await groq_client.generate_response(
+            message=request.message,
+            retrieved_context=retrieved_context,
+            detected_mood=mood_label,
+            elder_name=elder_name
+        )
+    except Exception as e:
+        logger.error(f"Groq generating error: {e}")
+        sys_reply = "I'm having trouble thinking right now. Please try again."
 
     # Audit log
     background_tasks.add_task(log_event, request.elder_id, "CHAT", f"Elder: {request.message} | SMARAN: {sys_reply}")
@@ -159,30 +174,34 @@ async def process_chat(
 
     # 6. Voice generation
     if request.return_audio:
-        voice_dir = os.path.join("data/voice_profiles", request.elder_id)
-        profile_audio_path = None
-        if os.path.exists(voice_dir):
-            for f in os.listdir(voice_dir):
-                if f.endswith(('.wav', '.mp3', '.webm', '.mpeg')):
-                    profile_audio_path = os.path.join(voice_dir, f)
-                    break
+        try:
+            voice_dir = os.path.join("data/voice_profiles", request.elder_id)
+            profile_audio_path = None
+            if os.path.exists(voice_dir):
+                for f in os.listdir(voice_dir):
+                    if f.endswith(('.wav', '.mp3', '.webm', '.mpeg')):
+                        profile_audio_path = os.path.join(voice_dir, f)
+                        break
 
-        if profile_audio_path:
-            logger.info("Using ElevenLabs Voice Cloning for profile.")
-            final_wav = openvoice_pipeline.apply_tone_color(request.elder_id, sys_reply, profile_audio_path)
-        else:
-            logger.info("No valid audio profile found, falling back to ElevenLabs default.")
-            final_wav = tts_pipeline.synthesize_speech(sys_reply)
+            if profile_audio_path:
+                logger.info("Using ElevenLabs Voice Cloning for profile.")
+                final_wav = openvoice_pipeline.apply_tone_color(request.elder_id, sys_reply, profile_audio_path)
+            else:
+                logger.info("No valid audio profile found, falling back to ElevenLabs default.")
+                final_wav = tts_pipeline.synthesize_speech(sys_reply)
 
-        headers = {
-            "X-Detected-Mood": mood_label,
-            "X-Mood-Confidence": str(confidence),
-            "X-Reply-Text": sys_reply.replace("\n", " "),
-            "X-Retrieval-Time-Ms": str(retrieval_time_ms)
-        }
-        if recommendation:
-            headers["X-MoodMitra-Triggered"] = str(recommendation.get('id', ''))
+            headers = {
+                "X-Detected-Mood": mood_label,
+                "X-Mood-Confidence": str(confidence),
+                "X-Reply-Text": sys_reply.replace("\n", " "),
+                "X-Retrieval-Time-Ms": str(retrieval_time_ms)
+            }
+            if recommendation:
+                headers["X-MoodMitra-Triggered"] = str(recommendation.get('id', ''))
 
-        return create_audio_response(final_wav, background_tasks, headers=headers)
+            return create_audio_response(final_wav, background_tasks, headers=headers)
+        except Exception as e:
+            logger.error(f"Voice generation failed: {e}. Falling back to text-only.")
+            # Fall through to return JSONResponse
 
     return JSONResponse(content=response_data)

@@ -1,6 +1,8 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import requests
+import json
+import time
 
 API_BASE_URL = "http://api:8000"
 
@@ -80,7 +82,7 @@ section[data-testid="stSidebar"] > div { padding-top: 0 !important; }
     font-weight:700 !important; font-size:1.35rem !important;
     color:#fff !important; letter-spacing:0.04em; margin:0 !important;
 }
-.sb-sub { font-size:0.65rem; color:rgba(255,255,255,0.3); text-transform:uppercase; letter-spacing:0.2em; padding-left:52px; }
+.sb-sub { font-size:0.65rem; color:rgba(255,255,255,0.3); text-transform:uppercase; letter-spacing:0.15em; padding-left:52px; }
 
 .sb-pill {
     display:inline-flex; align-items:center; gap:0.4rem;
@@ -123,19 +125,30 @@ section[data-testid="stSidebar"] .stTextInput > div > div > input:focus {
     border-color:rgba(0,151,167,0.65) !important;
     box-shadow:0 0 0 3px rgba(0,151,167,0.13) !important; outline:none !important;
 }
-section[data-testid="stSidebar"] .stButton > button {
+
+section[data-testid="stSidebar"] button[kind="secondary"] {
     background:rgba(192,57,43,0.1) !important; color:#ff8a80 !important;
     border:1px solid rgba(192,57,43,0.28) !important; border-radius:8px !important;
     font-size:0.82rem !important; font-weight:500 !important; width:100% !important;
     transition:all 0.2s ease !important;
 }
-section[data-testid="stSidebar"] .stButton > button:hover {
+section[data-testid="stSidebar"] button[kind="secondary"]:hover {
     background:rgba(192,57,43,0.2) !important; color:#fff !important;
     border-color:rgba(192,57,43,0.5) !important;
 }
+section[data-testid="stSidebar"] button[kind="primary"] {
+    background:rgba(21, 87, 192, 0.2) !important; color:#85b4ff !important;
+    border:1px solid rgba(21, 87, 192, 0.4) !important; border-radius:8px !important;
+    font-size:0.82rem !important; font-weight:500 !important; width:100% !important;
+    transition:all 0.2s ease !important;
+}
+section[data-testid="stSidebar"] button[kind="primary"]:hover {
+    background:rgba(21, 87, 192, 0.4) !important; color:#fff !important;
+    border-color:rgba(21, 87, 192, 0.6) !important;
+}
 
 /* MAIN BUTTONS */
-.main .stButton > button {
+.main button[kind="primary"] {
     background:var(--blue) !important; color:#fff !important;
     border:none !important; border-radius:8px !important;
     font-family:'IBM Plex Sans',sans-serif !important;
@@ -143,7 +156,7 @@ section[data-testid="stSidebar"] .stButton > button:hover {
     letter-spacing:0.02em !important; padding:0.5rem 1.1rem !important;
     transition:all 0.2s ease !important; box-shadow:var(--shadow-sm) !important;
 }
-.main .stButton > button:hover {
+.main button[kind="primary"]:hover {
     background:var(--navy-mid) !important;
     box-shadow:var(--shadow-md) !important; transform:translateY(-1px) !important;
 }
@@ -329,19 +342,35 @@ section[data-testid="stSidebar"] .stButton > button:hover {
 # ── Session state ──────────────────────────────────────────────────────────────
 if "token" not in st.session_state:
     st.session_state.token = None
+if "username" not in st.session_state:
+    st.session_state.username = None
+if "full_name" not in st.session_state:
+    st.session_state.full_name = None
 if "elder_id" not in st.session_state:
-    st.session_state.elder_id = "elder_123"
+    st.session_state.elder_id = None
+if "session_expired" not in st.session_state:
+    st.session_state.session_expired = False
+if "registered_username" not in st.session_state:
+    st.session_state.registered_username = ""
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def fetch_data(endpoint):
     try:
         res = requests.get(f"{API_BASE_URL}/api/{endpoint}", headers={"Authorization": f"Bearer {st.session_state.token}"})
+        if res.status_code == 401:
+            st.session_state.token = None
+            st.session_state.session_expired = True
+            st.rerun()
         return res.json().get("data", []) if res.status_code == 200 else []
     except:
         return []
 
 def reinforce_node(node_id):
     res = requests.post(f"{API_BASE_URL}/api/memory/reinforce/{node_id}", headers={"Authorization": f"Bearer {st.session_state.token}"})
+    if res.status_code == 401:
+        st.session_state.token = None
+        st.session_state.session_expired = True
+        st.rerun()
     st.toast("Memory reinforced ✓" if res.status_code == 200 else "Failed to reinforce", icon="✅" if res.status_code == 200 else "❌")
 
 def conf_bar(score):
@@ -349,8 +378,13 @@ def conf_bar(score):
     color = "#1b8a5a" if pct >= 70 else "#c47a00" if pct >= 40 else "#c0392b"
     return f'<div class="cbar"><div class="cfill" style="width:{pct}%;background:{color};"></div></div><div class="clabel" style="color:{color};">{pct}% confidence</div>'
 
+
 # ── LOGIN ─────────────────────────────────────────────────────────────────────
 def login():
+    if st.session_state.session_expired:
+        st.error("Session expired")
+        st.session_state.session_expired = False
+
     _, col, _ = st.columns([1, 1, 1])
     with col:
         st.markdown("""
@@ -359,26 +393,84 @@ def login():
             <h1>SMARAN</h1>
             <p>Caregiver Intelligence Portal</p>
         </div>
-        <div class="login-divider"></div>
         """, unsafe_allow_html=True)
-        with st.form("lf"):
-            username = st.text_input("Username", value="caregiver_demo")
-            password = st.text_input("Password", type="password", value="password123")
-            st.markdown("<br>", unsafe_allow_html=True)
-            submit = st.form_submit_button("Sign In  →", use_container_width=True)
-        if submit:
-            with st.spinner("Verifying credentials..."):
-                try:
-                    res = requests.post(f"{API_BASE_URL}/api/auth/login", data={"username": username, "password": password})
-                    if res.status_code == 200:
-                        st.session_state.token = res.json()["access_token"]
-                        st.success("Authentication successful.")
-                        st.rerun()
-                    else:
-                        st.error("Invalid credentials.")
-                except Exception as e:
-                    st.error(f"API unreachable: {e}")
+        
+        t_login, t_register = st.tabs(["🔐 Sign In", "📝 Register"])
+        
+        with t_login:
+            with st.form("lf"):
+                val = st.session_state.registered_username if st.session_state.registered_username else ""
+                username = st.text_input("Username", value=val)
+                password = st.text_input("Password", type="password")
+                st.markdown("<br>", unsafe_allow_html=True)
+                submit = st.form_submit_button("Sign In  →", use_container_width=True, type="primary")
+            if submit:
+                with st.spinner("Verifying credentials..."):
+                    try:
+                        res = requests.post(f"{API_BASE_URL}/api/auth/login", data={"username": username, "password": password})
+                        if res.status_code == 200:
+                            data = res.json()
+                            st.session_state.token = data["access_token"]
+                            
+                            # Fetch user profile
+                            me_res = requests.get(f"{API_BASE_URL}/api/auth/me", headers={"Authorization": f"Bearer {st.session_state.token}"})
+                            if me_res.status_code == 200:
+                                profile = me_res.json()
+                                st.session_state.username = profile.get("username", username)
+                                st.session_state.full_name = profile.get("full_name", username)
+                            st.session_state.registered_username = "" # clear after use
+                            st.rerun()
+                        elif res.status_code == 401:
+                            st.error("Incorrect username or password")
+                        else:
+                            st.error("Server error during login.")
+                    except requests.exceptions.RequestException:
+                        st.error("Cannot connect to server")
+                        
+        with t_register:
+            with st.form("rf"):
+                reg_full_name = st.text_input("Full Name")
+                reg_username = st.text_input("Username", help="lowercase, no spaces")
+                reg_email = st.text_input("Email")
+                reg_password = st.text_input("Password", type="password", help="min 8 chars, 1 number")
+                reg_password_confirm = st.text_input("Confirm Password", type="password")
+                st.markdown("<br>", unsafe_allow_html=True)
+                reg_submit = st.form_submit_button("Register", use_container_width=True, type="primary")
+            
+            if reg_submit:
+                if reg_password != reg_password_confirm:
+                    st.error("Passwords do not match.")
+                elif len(reg_password) < 8 or not any(char.isdigit() for char in reg_password):
+                    st.error("Password must be at least 8 characters with one number.")
+                else:
+                    with st.spinner("Registering..."):
+                        try:
+                            payload = {
+                                "username": reg_username,
+                                "email": reg_email,
+                                "password": reg_password,
+                                "full_name": reg_full_name,
+                                "role": "CAREGIVER"
+                            }
+                            reg_res = requests.post(f"{API_BASE_URL}/api/auth/register", json=payload)
+                            if reg_res.status_code == 200:
+                                st.success("Registration successful! Please sign in.")
+                                st.session_state.registered_username = reg_username
+                            elif reg_res.status_code == 409:
+                                err_detail = str(reg_res.json().get("detail", ""))
+                                if "Username" in err_detail:
+                                    st.error("Username already taken. Try a different one.")
+                                elif "Email" in err_detail:
+                                    st.error("Email already registered. Try signing in instead.")
+                                else:
+                                    st.error(err_detail)
+                            else:
+                                st.error(f"Registration failed: {reg_res.text}")
+                        except requests.exceptions.RequestException:
+                            st.error("Cannot connect to server")
+                            
         st.markdown('<div class="login-footer">SMARAN v1.0 · Secure Clinical Interface</div>', unsafe_allow_html=True)
+
 
 # ── DASHBOARD ─────────────────────────────────────────────────────────────────
 def dashboard():
@@ -387,21 +479,70 @@ def dashboard():
     with st.sidebar:
         st.markdown(f"""
         <div class="sb-top">
-            <div class="sb-logo"><div class="sb-icon">🏥</div><h2>SMARAN</h2></div>
-            <div class="sb-sub">Caregiver Hub</div>
+            <div class="sb-logo"><div class="sb-icon">🧠</div><h2>SMARAN</h2></div>
+            <div class="sb-sub">Memory Care Intelligence</div>
         </div>
-        <div class="sb-pill"><div class="dot"></div> All Systems Online</div>
-        <div class="sb-section-label">Active Patient</div>
         """, unsafe_allow_html=True)
-        st.session_state.elder_id = st.text_input("Elder ID", value=st.session_state.elder_id, label_visibility="collapsed")
-        st.markdown(f'<div class="elder-chip"><div class="lbl">Monitoring</div><div class="val">{st.session_state.elder_id}</div></div>', unsafe_allow_html=True)
-        if st.button("Sign Out", use_container_width=True):
-            st.session_state.token = None
+        
+        fn = st.session_state.get("full_name") or st.session_state.get("username") or "Caregiver"
+        st.markdown(f'<div style="padding:0 1.4rem; font-size: 0.9rem; font-weight:600; color:#fff; margin-bottom:0.6rem;">Welcome, {fn}!</div>', unsafe_allow_html=True)
+        if st.session_state.get("username") == "caregiver_demo":
+            st.markdown('<div style="background:#fef3c7;color:#d97706;padding:10px;border-radius:8px;margin:0 1.4rem 1rem;font-size:0.8rem;text-align:center;"><strong>Demo Mode Active</strong><br>Using sample caregiver credentials.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="login-divider" style="margin:0.5rem 1.4rem 1rem;"></div>', unsafe_allow_html=True)
+        
+        elder_input = st.text_input("Target Elder ID", value=st.session_state.elder_id if st.session_state.elder_id else "")
+        if st.button("Load Elder  →", type="primary", use_container_width=True):
+            st.session_state.elder_id = elder_input
             st.rerun()
+            
+        if st.session_state.elder_id:
+            if st.button("🔄 Refresh Data", type="secondary", use_container_width=True):
+                st.rerun()
+
+            node_count = 0
+            try:
+                # Lightweight way to get count if possible or default to checking graph presence
+                res = requests.get(f"{API_BASE_URL}/api/memory/mindmap/{st.session_state.elder_id}", headers=headers)
+                if res.status_code == 200:
+                    data = res.json()
+                    # Example mapping extracting length or keeping safe fallback
+                    node_count = len(data.get("nodes", []))
+                elif res.status_code == 401:
+                    st.session_state.token = None
+                    st.session_state.session_expired = True
+                    st.rerun()
+            except:
+                pass
+            st.markdown(f'<div class="elder-chip" style="margin-top:1rem;"><div class="lbl">Monitoring</div><div class="val">{st.session_state.elder_id}</div><div class="lbl" style="margin-top:0.6rem; color:var(--teal)">Total Memories: {node_count}</div></div>', unsafe_allow_html=True)
+            
+            
+        st.markdown('<div class="login-divider" style="margin:1rem 1.4rem;"></div>', unsafe_allow_html=True)
+        if st.button("Logout", type="secondary"):
+            try:
+                requests.post(f"{API_BASE_URL}/api/auth/logout", headers=headers)
+            except:
+                pass
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+    if not st.session_state.elder_id:
+        st.markdown('<div style="margin-top:5rem;text-align:center;font-size:1.3rem;color:var(--text-soft);">👆 Enter an Elder ID in the sidebar to get started.</div>', unsafe_allow_html=True)
+        return
 
     meds  = fetch_data(f"memory/medicines/{st.session_state.elder_id}")
     appts = fetch_data(f"memory/appointments/{st.session_state.elder_id}")
     syms  = fetch_data(f"memory/symptoms/{st.session_state.elder_id}")
+
+    with st.sidebar:
+        export_data = json.dumps({
+            "elder_id": st.session_state.elder_id,
+            "export_time": datetime.now().isoformat(),
+            "medicines": meds,
+            "appointments": appts,
+            "symptoms": syms
+        }, indent=2)
+        st.download_button("📥 Export Medical Summary (JSON)", data=export_data, file_name=f"smaran_summary_{st.session_state.elder_id}.json", mime="application/json", use_container_width=True)
 
     t1, t2, t3, t4, t5 = st.tabs(["📊  Dashboard", "🏥  Medical Records", "📝  Ingest Memory", "🧠  Brain Map", "🎙️  Voice Profiles"])
 
@@ -419,13 +560,24 @@ def dashboard():
         st.markdown('<div class="sec-head"><h3>Semantic Memory Search</h3><div class="sec-line"></div><span class="sec-note">FAISS + Neo4j Graph</span></div>', unsafe_allow_html=True)
         q = st.text_input("Search", placeholder="e.g. 'back pain', 'Metformin', 'Dr. Gupta appointment'...", label_visibility="collapsed")
         if q:
+            start_search = time.time()
             with st.spinner("Searching memory graph..."):
                 res = requests.get(f"{API_BASE_URL}/api/memory/search/{st.session_state.elder_id}?query={q}", headers=headers)
+            search_ms = int((time.time() - start_search)*1000)
+            
             if res.status_code == 200:
                 results = res.json().get("results", [])
-                st.markdown(f'<div style="font-size:0.74rem;color:var(--text-soft);margin-bottom:0.8rem;">{len(results)} result(s) found</div>', unsafe_allow_html=True)
-                for r in results:
-                    st.markdown(f'<div class="sr-item"><div class="sr-score">↗ Score {r.get("semantic_score",0):.3f}</div><div class="sr-text">{r.get("context","No context")}</div></div>', unsafe_allow_html=True)
+                if not results:
+                    st.markdown('<p style="color:var(--text-faint);font-size:0.83rem;">🧠 No memories found. Use Memory Ingestion to add some.</p>', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<div style="font-size:0.75rem;color:var(--text-soft);margin-bottom:0.8rem;">{len(results)} result(s) found in {search_ms}ms</div>', unsafe_allow_html=True)
+                    for r in results:
+                        st.markdown(f'<div class="sr-item"><div class="sr-score">↗ Score {r.get("semantic_score",0):.3f}</div><div class="sr-text">{r.get("context","No context")}</div></div>', unsafe_allow_html=True)
+                        st.code(r.get("context", ""), language=None)
+            elif res.status_code == 401:
+                st.session_state.token = None
+                st.session_state.session_expired = True
+                st.rerun()
             else:
                 st.error("Search failed.")
 
@@ -440,7 +592,7 @@ def dashboard():
                     st.markdown(f'<div class="rec-card"><div class="rec-title">{m.get("name","Unknown")}</div><div class="rec-sub">{m.get("dosage","No dosage info")}</div>{conf_bar(m.get("confidence_score",0))}</div>', unsafe_allow_html=True)
                     st.button("↑ Reinforce", key=f"rm_{m.get('id')}", use_container_width=True, on_click=reinforce_node, args=(m.get('id'),))
             else:
-                st.markdown('<p style="color:var(--text-faint);font-size:0.83rem;">No medicines tracked.</p>', unsafe_allow_html=True)
+                st.markdown('<p style="color:var(--text-faint);font-size:0.83rem;">💊 No medicines recorded yet for this elder.</p>', unsafe_allow_html=True)
         with cs:
             st.markdown('<span class="col-tag ct-amber">🌡️ Symptoms</span>', unsafe_allow_html=True)
             if syms:
@@ -448,7 +600,7 @@ def dashboard():
                     st.markdown(f'<div class="rec-card"><div class="rec-title">{s.get("name","Unknown")}</div><div class="rec-sub">Severity: {s.get("severity","unspecified")}</div>{conf_bar(s.get("confidence_score",0))}</div>', unsafe_allow_html=True)
                     st.button("↑ Reinforce", key=f"rs_{s.get('id')}", use_container_width=True, on_click=reinforce_node, args=(s.get('id'),))
             else:
-                st.markdown('<p style="color:var(--text-faint);font-size:0.83rem;">No symptoms reported.</p>', unsafe_allow_html=True)
+                st.markdown('<p style="color:var(--text-faint);font-size:0.83rem;">🤒 No symptoms recorded yet.</p>', unsafe_allow_html=True)
         with ca:
             st.markdown('<span class="col-tag ct-blue">📅 Appointments</span>', unsafe_allow_html=True)
             if appts:
@@ -456,7 +608,7 @@ def dashboard():
                     st.markdown(f'<div class="rec-card"><div class="rec-title">{a.get("title","Appointment")}</div><div class="rec-sub">{a.get("datetime","Date TBD")}</div>{conf_bar(a.get("confidence_score",0))}</div>', unsafe_allow_html=True)
                     st.button("↑ Reinforce", key=f"ra_{a.get('id')}", use_container_width=True, on_click=reinforce_node, args=(a.get('id'),))
             else:
-                st.markdown('<p style="color:var(--text-faint);font-size:0.83rem;">No appointments scheduled.</p>', unsafe_allow_html=True)
+                st.markdown('<p style="color:var(--text-faint);font-size:0.83rem;">📅 No appointments recorded yet.</p>', unsafe_allow_html=True)
 
     # ── TAB 3 ────────────────────────────────────────────────────────────────
     with t3:
@@ -468,7 +620,7 @@ def dashboard():
                 mem_text = st.text_area("Clinical Observation", placeholder="e.g. 'Ramesh reported chest tightness this morning after a short walk. BP was 140/90.'", height=140)
                 source = st.selectbox("Source Type", ["caregiver_input", "sensor", "document", "medical_record"])
                 st.markdown("<br>", unsafe_allow_html=True)
-                sub = st.form_submit_button("Process & Ingest  →", use_container_width=True)
+                sub = st.form_submit_button("Process & Ingest  →", use_container_width=True, type="primary")
             st.markdown('</div>', unsafe_allow_html=True)
             if sub and mem_text:
                 with st.spinner("Running NLP pipeline..."):
@@ -479,6 +631,10 @@ def dashboard():
                     st.success(f"✓ {n} memory node{'s' if n!=1 else ''} written to graph.")
                     for a in d.get("conflict_alerts", []):
                         st.markdown(f'<div class="conflict-card">🚨 <strong>Conflict</strong> — {a["field"]}: was <em>\'{a["old_value"]}\'</em>, now <em>\'{a["new_value"]}\'</em></div>', unsafe_allow_html=True)
+                elif res.status_code == 401:
+                    st.session_state.token = None
+                    st.session_state.session_expired = True
+                    st.rerun()
                 else:
                     st.error("Ingestion failed. Check API logs.")
         with ci:
@@ -507,7 +663,7 @@ def dashboard():
         st.markdown('<div class="pg-header"><div><h1>Brain Map</h1><div class="pg-sub">Interactive knowledge graph — Pyvis + Neo4j</div></div><span class="pg-badge">Live Graph</span></div>', unsafe_allow_html=True)
         cb, _ = st.columns([1, 4])
         with cb:
-            gen = st.button("Generate Graph  →", use_container_width=True)
+            gen = st.button("Generate Graph  →", use_container_width=True, type="primary")
         if gen:
             with st.spinner("Fetching graph topology..."):
                 res = requests.get(f"{API_BASE_URL}/api/memory/mindmap/{st.session_state.elder_id}", headers=headers)
@@ -517,6 +673,10 @@ def dashboard():
                     st.markdown('<div class="graph-wrap">', unsafe_allow_html=True)
                     components.html(html_map, height=640, scrolling=True)
                     st.markdown('</div>', unsafe_allow_html=True)
+            elif res.status_code == 401:
+                st.session_state.token = None
+                st.session_state.session_expired = True
+                st.rerun()
             else:
                 st.error("Graph fetch failed.")
 
@@ -537,11 +697,18 @@ def dashboard():
             """, unsafe_allow_html=True)
             uploaded = st.file_uploader("Upload Voice Sample (.wav or .mp3)", type=["wav", "mp3"])
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Upload & Activate Profile  →", use_container_width=True):
+            if st.button("Upload & Activate Profile  →", use_container_width=True, type="primary"):
                 if uploaded:
                     with st.spinner("Uploading voice profile..."):
                         res = requests.post(f"{API_BASE_URL}/api/voice/upload", files={"file": (uploaded.name, uploaded.getvalue(), uploaded.type)}, data={"elder_id": st.session_state.elder_id}, headers=headers)
-                    st.success("✓ Voice profile uploaded and activated.") if res.status_code == 200 else st.error("Upload failed — verify ElevenLabs API key permissions.")
+                    if res.status_code == 200:
+                        st.success("✓ Voice profile uploaded and activated.") 
+                    elif res.status_code == 401:
+                        st.session_state.token = None
+                        st.session_state.session_expired = True
+                        st.rerun()
+                    else:
+                        st.error("Upload failed — verify ElevenLabs API key permissions.")
                 else:
                     st.warning("Please select an audio file first.")
         with cr:

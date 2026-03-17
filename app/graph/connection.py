@@ -15,7 +15,10 @@ class Neo4jConnectionManager:
                 auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
                 max_connection_pool_size=50,
                 connection_acquisition_timeout=60.0,
+                connection_timeout=30,
+                max_connection_lifetime=3600,
             )
+
             # Verify connectivity
             await self.driver.verify_connectivity()
             logger.info("Successfully connected to Neo4j AuraDB.")
@@ -36,6 +39,7 @@ class Neo4jConnectionManager:
         """
         if self.driver is None:
             await self.connect()
-        return self.driver.session()
+        return self.driver.session(default_access_mode="WRITE")
+
 
 neo4j_manager = Neo4jConnectionManager()
