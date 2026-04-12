@@ -90,5 +90,3 @@ If you've run the seeder script, use the following to explore the portals:
 Once running, interactive API docs are auto-generated:
 - Swagger: `http://localhost:8000/docs`
 
----
-*Built with ❤️ for the Hackathon*
